@@ -2,6 +2,7 @@ from django.http import HttpResponse, Http404
 from django.shortcuts import get_object_or_404
 
 from djpubsubhubbub.models import Subscription
+from djpubsubhubbub.signals import verified
 
 def callback(request, pk):
     if request.method == 'GET':
@@ -20,6 +21,7 @@ def callback(request, pk):
                                              verify_token=verify_token)
             subscription.verified = True
             subscription.set_expiration(int(lease_seconds))
+            verified.send(sender=subscription)
 
         return HttpResponse(challenge, content_type='text/plain')
 

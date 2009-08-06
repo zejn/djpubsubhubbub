@@ -9,6 +9,8 @@ from django.core.urlresolvers import reverse, Resolver404
 from django.db import models
 from django.utils.hashcompat import sha_constructor
 
+from djpubsubhubbub import signals
+
 DEFAULT_LEASE_SECONDS = 2592000 # 30 days in seconds
 
 class SubscriptionManager(models.Manager):
@@ -28,6 +30,7 @@ class SubscriptionManager(models.Manager):
 
         subscription, created = self.get_or_create(
             hub=hub, topic=topic)
+        signals.pre_subscribe.send(sender=subscription, created=created)
         subscription.set_expiration(lease_seconds)
 
         if callback is None:
@@ -61,6 +64,8 @@ class SubscriptionManager(models.Manager):
                     topic, hub, error))
 
         subscription.save()
+        if subscription.verified:
+            signals.verified.send(sender=subscription)
         return subscription
 
 
@@ -110,3 +115,14 @@ class Subscription(models.Model):
         self.verify_token = token
         self.save()
         return token
+
+    def __unicode__(self):
+        if self.verified:
+            verified = u'verified'
+        else:
+            verified = u'unverified'
+        return u'to %s on %s: %s' % (
+            self.topic, self.hub, verified)
+
+    def __str__(self):
+        return str(unicode(self))

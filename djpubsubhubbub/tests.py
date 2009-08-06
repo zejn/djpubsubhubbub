@@ -5,6 +5,7 @@ from django.core.urlresolvers import reverse
 from django.test import TestCase
 
 from djpubsubhubbub.models import Subscription, SubscriptionManager
+from djpubsubhubbub.signals import pre_subscribe, verified
 
 class MockResponse(object):
     def __init__(self, status, data=None):
@@ -27,10 +28,17 @@ class PSHBSubscriptionManagerTest(TestCase):
         SubscriptionManager._send_request = self._send_request
         self.responses = []
         self.requests = []
+        self.signals = []
+        for connecter in pre_subscribe, verified:
+            def callback(signal=None, **kwargs):
+                self.signals.append((signal, kwargs))
+            connecter.connect(callback, dispatch_uid=connecter, weak=False)
 
     def tearDown(self):
         SubscriptionManager._send_request = self._old_send_request
         del self._old_send_request
+        for signal in pre_subscribe, verified:
+            signal.disconnect(dispatch_uid=signal)
 
     def _send_request(self, url, data):
         self.requests.append((url, data))
@@ -43,6 +51,10 @@ class PSHBSubscriptionManagerTest(TestCase):
         """
         self.responses.append(MockResponse(204))
         sub = Subscription.objects.subscribe('topic', 'hub', 'callback', 2000)
+        self.assertEquals(len(self.signals), 2)
+        self.assertEquals(self.signals[0], (pre_subscribe, {'sender': sub,
+                                                            'created': True}))
+        self.assertEquals(self.signals[1], (verified, {'sender': sub}))
         self.assertEquals(sub.hub, 'hub')
         self.assertEquals(sub.topic, 'topic')
         self.assertEquals(sub.verified, True)
@@ -66,6 +78,9 @@ class PSHBSubscriptionManagerTest(TestCase):
         """
         self.responses.append(MockResponse(202))
         sub = Subscription.objects.subscribe('topic', 'hub', 'callback', 2000)
+        self.assertEquals(len(self.signals), 1)
+        self.assertEquals(self.signals[0], (pre_subscribe, {'sender': sub,
+                                                            'created': True}))
         self.assertEquals(sub.hub, 'hub')
         self.assertEquals(sub.topic, 'topic')
         self.assertEquals(sub.verified, False)
@@ -113,6 +128,15 @@ class PSHBCallbackViewTestCase(TestCase):
 
     urls = 'djpubsubhubbub.urls'
 
+    def setUp(self):
+        self.signals = []
+        verified.connect(
+            lambda signal=None, **kwargs: self.signals.append(kwargs),
+            weak=False)
+
+    def tearDown(self):
+        verified.receivers = []
+
     def test_verify(self):
         """
         Getting the callback from the server should verify the subscription.
@@ -135,6 +159,8 @@ class PSHBCallbackViewTestCase(TestCase):
         self.assertEquals(response.content, 'challenge')
         sub = Subscription.objects.get(pk=sub.pk)
         self.assertEquals(sub.verified, True)
+        self.assertEquals(len(self.signals), 1)
+        self.assertEquals(self.signals[0], {'sender': sub})
 
     def test_404(self):
         """
@@ -159,6 +185,7 @@ class PSHBCallbackViewTestCase(TestCase):
                                     'hub.lease_seconds': 2000,
                                     'hub.verify_token': verify_token[1:]})
         self.assertEquals(response.status_code, 404)
+        self.assertEquals(len(self.signals), 0)
 
         response = self.client.get(reverse('pubsubhubbub_callback',
                                            args=(sub.pk,)),
@@ -168,6 +195,7 @@ class PSHBCallbackViewTestCase(TestCase):
                                     'hub.lease_seconds': 2000,
                                     'hub.verify_token': verify_token[1:]})
         self.assertEquals(response.status_code, 404)
+        self.assertEquals(len(self.signals), 0)
 
         response = self.client.get(reverse('pubsubhubbub_callback',
                                            args=(sub.pk,)),
@@ -177,6 +205,7 @@ class PSHBCallbackViewTestCase(TestCase):
                                     'hub.lease_seconds': 2000,
                                     'hub.verify_token': verify_token})
         self.assertEquals(response.status_code, 404)
+        self.assertEquals(len(self.signals), 0)
 
         response = self.client.get(reverse('pubsubhubbub_callback',
                                            args=(sub.pk,)),
@@ -186,3 +215,4 @@ class PSHBCallbackViewTestCase(TestCase):
                                     'hub.lease_seconds': 2000,
                                     'hub.verify_token': verify_token[:-5]})
         self.assertEquals(response.status_code, 404)
+        self.assertEquals(len(self.signals), 0)
