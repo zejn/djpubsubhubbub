@@ -21,7 +21,9 @@ class MockResponse(object):
         data, self.data = self.data, None
         return data
 
-class PSHBSubscriptionManagerTest(TestCase):
+class PSHBTestBase:
+
+    urls = 'djpubsubhubbub.urls'
 
     def setUp(self):
         self._old_send_request = SubscriptionManager._send_request
@@ -29,7 +31,7 @@ class PSHBSubscriptionManagerTest(TestCase):
         self.responses = []
         self.requests = []
         self.signals = []
-        for connecter in pre_subscribe, verified:
+        for connecter in pre_subscribe, verified, updated:
             def callback(signal=None, **kwargs):
                 self.signals.append((signal, kwargs))
             connecter.connect(callback, dispatch_uid=connecter, weak=False)
@@ -43,6 +45,8 @@ class PSHBSubscriptionManagerTest(TestCase):
     def _send_request(self, url, data):
         self.requests.append((url, data))
         return self.responses.pop()
+
+class PSHBSubscriptionManagerTest(PSHBTestBase, TestCase):
 
     def test_sync_verify(self):
         """
@@ -124,18 +128,7 @@ class PSHBSubscriptionManagerTest(TestCase):
         else:
             self.fail('subscription did not raise URLError exception')
 
-class PSHBCallbackViewTestCase(TestCase):
-
-    urls = 'djpubsubhubbub.urls'
-
-    def setUp(self):
-        self.signals = []
-        verified.connect(
-            lambda signal=None, **kwargs: self.signals.append(kwargs),
-            weak=False)
-
-    def tearDown(self):
-        verified.receivers = []
+class PSHBCallbackViewTestCase(PSHBTestBase, TestCase):
 
     def test_verify(self):
         """
@@ -160,7 +153,7 @@ class PSHBCallbackViewTestCase(TestCase):
         sub = Subscription.objects.get(pk=sub.pk)
         self.assertEquals(sub.verified, True)
         self.assertEquals(len(self.signals), 1)
-        self.assertEquals(self.signals[0], {'sender': sub})
+        self.assertEquals(self.signals[0], (verified, {'sender': sub}))
 
     def test_404(self):
         """
@@ -217,9 +210,7 @@ class PSHBCallbackViewTestCase(TestCase):
         self.assertEquals(response.status_code, 404)
         self.assertEquals(len(self.signals), 0)
 
-class PSHBUpdateTestCase(TestCase):
-
-    urls = 'djpubsubhubbub.urls'
+class PSHBUpdateTestCase(PSHBTestBase, TestCase):
 
     def test_update(self):
         # this data comes from
@@ -303,3 +294,150 @@ class PSHBUpdateTestCase(TestCase):
                           'http://publisher.example.com/happycat25.xml')
         self.assertEquals(update.entries[3].id,
                           'http://publisher.example.com/happycat25.xml')
+
+    def test_update_with_changed_hub(self):
+        update_data = """<?xml version="1.0"?>
+<atom:feed>
+  <!-- Normally here would be source, title, etc ... -->
+
+  <link rel="hub" href="http://myhub.example.com/endpoint" />
+  <link rel="self" href="http://publisher.example.com/happycats.xml" />
+  <updated>2008-08-11T02:15:01Z</updated>
+
+  <entry>
+    <title>Heathcliff</title>
+    <link href="http://publisher.example.com/happycat25.xml" />
+    <id>http://publisher.example.com/happycat25.xml</id>
+    <updated>2008-08-11T02:15:01Z</updated>
+    <content>
+      What a happy cat. Full content goes here.
+    </content>
+  </entry>
+</atom:feed>
+"""
+        sub = Subscription.objects.create(
+            hub="hub",
+            topic="http://publisher.example.com/happycats.xml",
+            lease_expires=datetime.now() + timedelta(days=1))
+
+        callback_data = []
+        updated.connect(
+            lambda sender=None, update=None, **kwargs: callback_data.append(
+                (sender, update)),
+            weak=False)
+
+        self.responses.append(MockResponse(204))
+
+        response = self.client.post(reverse('pubsubhubbub_callback',
+                                            args=(sub.pk,)),
+                                    update_data, 'application/atom+xml')
+        self.assertEquals(response.status_code, 200)
+        self.assertEquals(
+            Subscription.objects.filter(
+                hub='http://myhub.example.com/endpoint',
+                topic='http://publisher.example.com/happycats.xml',
+                verified=True).count(), 1)
+        self.assertEquals(len(self.requests), 1)
+        self.assertEquals(self.requests[0][0],
+                          'http://myhub.example.com/endpoint')
+        self.assertEquals(self.requests[0][1]['callback'],
+                          'http://testserver/1/')
+        self.assert_((self.requests[0][1]['lease_seconds'] - 86400) < 5)
+
+    def test_update_with_changed_self(self):
+        update_data = """<?xml version="1.0"?>
+<atom:feed>
+  <!-- Normally here would be source, title, etc ... -->
+
+  <link rel="hub" href="http://myhub.example.com/endpoint" />
+  <link rel="self" href="http://publisher.example.com/happycats.xml" />
+  <updated>2008-08-11T02:15:01Z</updated>
+
+  <entry>
+    <title>Heathcliff</title>
+    <link href="http://publisher.example.com/happycat25.xml" />
+    <id>http://publisher.example.com/happycat25.xml</id>
+    <updated>2008-08-11T02:15:01Z</updated>
+    <content>
+      What a happy cat. Full content goes here.
+    </content>
+  </entry>
+</atom:feed>
+"""
+        sub = Subscription.objects.create(
+            hub="http://myhub.example.com/endpoint",
+            topic="topic",
+            lease_expires=datetime.now() + timedelta(days=1))
+
+        callback_data = []
+        updated.connect(
+            lambda sender=None, update=None, **kwargs: callback_data.append(
+                (sender, update)),
+            weak=False)
+
+        self.responses.append(MockResponse(204))
+
+        response = self.client.post(reverse('pubsubhubbub_callback',
+                                            args=(sub.pk,)),
+                                    update_data, 'application/atom+xml')
+        self.assertEquals(response.status_code, 200)
+        self.assertEquals(
+            Subscription.objects.filter(
+                hub='http://myhub.example.com/endpoint',
+                topic='http://publisher.example.com/happycats.xml',
+                verified=True).count(), 1)
+        self.assertEquals(len(self.requests), 1)
+        self.assertEquals(self.requests[0][0],
+                          'http://myhub.example.com/endpoint')
+        self.assertEquals(self.requests[0][1]['callback'],
+                          'http://testserver/1/')
+        self.assert_((self.requests[0][1]['lease_seconds'] - 86400) < 5)
+
+    def test_update_with_changed_hub_and_self(self):
+        update_data = """<?xml version="1.0"?>
+<atom:feed>
+  <!-- Normally here would be source, title, etc ... -->
+
+  <link rel="hub" href="http://myhub.example.com/endpoint" />
+  <link rel="self" href="http://publisher.example.com/happycats.xml" />
+  <updated>2008-08-11T02:15:01Z</updated>
+
+  <entry>
+    <title>Heathcliff</title>
+    <link href="http://publisher.example.com/happycat25.xml" />
+    <id>http://publisher.example.com/happycat25.xml</id>
+    <updated>2008-08-11T02:15:01Z</updated>
+    <content>
+      What a happy cat. Full content goes here.
+    </content>
+  </entry>
+</atom:feed>
+"""
+        sub = Subscription.objects.create(
+            hub="hub",
+            topic="topic",
+            lease_expires=datetime.now() + timedelta(days=1))
+
+        callback_data = []
+        updated.connect(
+            lambda sender=None, update=None, **kwargs: callback_data.append(
+                (sender, update)),
+            weak=False)
+
+        self.responses.append(MockResponse(204))
+
+        response = self.client.post(reverse('pubsubhubbub_callback',
+                                            args=(sub.pk,)),
+                                    update_data, 'application/atom+xml')
+        self.assertEquals(response.status_code, 200)
+        self.assertEquals(
+            Subscription.objects.filter(
+                hub='http://myhub.example.com/endpoint',
+                topic='http://publisher.example.com/happycats.xml',
+                verified=True).count(), 1)
+        self.assertEquals(len(self.requests), 1)
+        self.assertEquals(self.requests[0][0],
+                          'http://myhub.example.com/endpoint')
+        self.assertEquals(self.requests[0][1]['callback'],
+                          'http://testserver/1/')
+        self.assert_((self.requests[0][1]['lease_seconds'] - 86400) < 5)

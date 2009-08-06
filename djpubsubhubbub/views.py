@@ -48,11 +48,11 @@ def callback(request, pk):
                 needs_update = True
 
             if needs_update:
-                expiration_time = datetime.now() - subscription.lease_expires
+                expiration_time = subscription.lease_expires - datetime.now()
                 seconds = expiration_time.days*86400 + expiration_time.seconds
                 Subscription.objects.subscribe(
                     self_url, hub_url,
-                    callback=request.get_full_path(),
+                    callback=request.build_absolute_uri(),
                     lease_seconds=seconds)
 
             updated.send(sender=subscription, update=parsed)
