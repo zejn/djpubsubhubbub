@@ -77,14 +77,14 @@ class SubscriptionManager(models.Manager):
 
     def _send_request(self, url, data):
         def data_generator():
-            for key, value in data:
+            for key, value in data.items():
                 key = 'hub.' + key
-                if isinstance(value, basestring):
-                    yield key, value
+                if isinstance(value, (basestring, int)):
+                    yield key, str(value)
                 else:
                     for subvalue in value:
                         yield key, value
-        encoded_data = urlencode(data_generator())
+        encoded_data = urlencode(list(data_generator()))
         return urllib2.urlopen(url, encoded_data)
 
 class Subscription(models.Model):
