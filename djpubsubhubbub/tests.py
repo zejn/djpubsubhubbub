@@ -5,7 +5,7 @@ from django.core.urlresolvers import reverse
 from django.test import TestCase
 
 from djpubsubhubbub.models import Subscription, SubscriptionManager
-from djpubsubhubbub.signals import pre_subscribe, verified
+from djpubsubhubbub.signals import pre_subscribe, verified, updated
 
 class MockResponse(object):
     def __init__(self, status, data=None):
@@ -216,3 +216,90 @@ class PSHBCallbackViewTestCase(TestCase):
                                     'hub.verify_token': verify_token[:-5]})
         self.assertEquals(response.status_code, 404)
         self.assertEquals(len(self.signals), 0)
+
+class PSHBUpdateTestCase(TestCase):
+
+    urls = 'djpubsubhubbub.urls'
+
+    def test_update(self):
+        # this data comes from
+        # http://pubsubhubbub.googlecode.com/svn/trunk/pubsubhubbub-core-0.1.html#anchor3
+        update_data = """<?xml version="1.0"?>
+<atom:feed>
+  <!-- Normally here would be source, title, etc ... -->
+
+  <link rel="hub" href="http://myhub.example.com/endpoint" />
+  <link rel="self" href="http://publisher.example.com/happycats.xml" />
+  <updated>2008-08-11T02:15:01Z</updated>
+
+  <!-- Example of a full entry. -->
+  <entry>
+    <title>Heathcliff</title>
+    <link href="http://publisher.example.com/happycat25.xml" />
+    <id>http://publisher.example.com/happycat25.xml</id>
+    <updated>2008-08-11T02:15:01Z</updated>
+    <content>
+      What a happy cat. Full content goes here.
+    </content>
+  </entry>
+
+  <!-- Example of an entity that isn't full/is truncated. This is implied
+       by the lack of a <content> element and a <summary> element instead. -->
+  <entry >
+    <title>Heathcliff</title>
+    <link href="http://publisher.example.com/happycat25.xml" />
+    <id>http://publisher.example.com/happycat25.xml</id>
+    <updated>2008-08-11T02:15:01Z</updated>
+    <summary>
+      What a happy cat!
+    </summary>
+  </entry>
+
+  <!-- Meta-data only; implied by the lack of <content> and
+       <summary> elements. -->
+  <entry>
+    <title>Garfield</title>
+    <link rel="alternate" href="http://publisher.example.com/happycat24.xml" />
+    <id>http://publisher.example.com/happycat25.xml</id>
+    <updated>2008-08-11T02:15:01Z</updated>
+  </entry>
+
+  <!-- Context entry that's meta-data only and not new. Implied because the
+       update time on this entry is before the //atom:feed/updated time. -->
+  <entry>
+    <title>Nermal</title>
+    <link rel="alternate" href="http://publisher.example.com/happycat23s.xml" />
+    <id>http://publisher.example.com/happycat25.xml</id>
+    <updated>2008-07-10T12:28:13Z</updated>
+  </entry>
+
+</atom:feed>
+"""
+
+        sub = Subscription.objects.create(
+            hub="http://myhub.example.com/endpoint",
+            topic="http://publisher.example.com/happycats.xml")
+
+        callback_data = []
+        updated.connect(
+            lambda sender=None, update=None, **kwargs: callback_data.append(
+                (sender, update)),
+            weak=False)
+
+        response = self.client.post(reverse('pubsubhubbub_callback',
+                                            args=(sub.pk,)),
+                                    update_data, 'application/atom+xml')
+        self.assertEquals(response.status_code, 200)
+
+        self.assertEquals(len(callback_data), 1)
+        sender, update = callback_data[0]
+        self.assertEquals(sender, sub)
+        self.assertEquals(len(update.entries), 4)
+        self.assertEquals(update.entries[0].id,
+                          'http://publisher.example.com/happycat25.xml')
+        self.assertEquals(update.entries[1].id,
+                          'http://publisher.example.com/happycat25.xml')
+        self.assertEquals(update.entries[2].id,
+                          'http://publisher.example.com/happycat25.xml')
+        self.assertEquals(update.entries[3].id,
+                          'http://publisher.example.com/happycat25.xml')
