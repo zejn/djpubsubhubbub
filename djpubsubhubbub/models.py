@@ -66,7 +66,7 @@ class SubscriptionManager(models.Manager):
                 raise TypeError(
                     'callback cannot be None if there is not a reverable URL')
             else:
-                callback = 'http://' + Site.objects.get_current() + \
+                callback = 'http://' + str(Site.objects.get_current()) + \
                     callback_path
 
         response = self._send_request(hub, {
@@ -108,7 +108,7 @@ class SubscriptionManager(models.Manager):
                     yield key, str(value)
                 else:
                     for subvalue in value:
-                        yield key, value
+                        yield key, subvalue
         encoded_data = urlencode(list(data_generator()))
         return urllib2.urlopen(url, encoded_data)
 
